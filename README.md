@@ -215,9 +215,9 @@ flowchart LR
     RM -->|semantic search top-5| Long
     Long -->|context prepended| LLM[call_llm node]
     LLM --> Response
-    Response --> SA[/memory/short/append]
+    Response --> SA["POST /memory/short/append"]
     SA --> Short
-    Response --> SE[/memory/session/end]
+    Response --> SE["POST /memory/session/end"]
     SE -->|last 10 msgs embedded| Long
     SE -->|clear session| Short
 ```
