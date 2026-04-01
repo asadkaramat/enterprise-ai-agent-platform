@@ -199,16 +199,16 @@ flowchart TD
 flowchart LR
     subgraph Short["Short-Term (Redis)"]
         direction TB
-        SK[Key: memory:short:{tenant_id}:{session_id}]
-        SL[JSON list — 50 message max]
-        ST[TTL: 24 hours]
+        SK["Key: memory:short:{tenant_id}:{session_id}"]
+        SL["JSON list — 50 message max"]
+        ST["TTL: 24 hours"]
     end
 
     subgraph Long["Long-Term (Qdrant)"]
         direction TB
-        LK[Collection: memory_{tenant_id}]
-        LE[Embedding: all-MiniLM-L6-v2, 384-dim]
-        LS[Similarity: COSINE > 0.4]
+        LK["Collection: memory_{tenant_id}"]
+        LE["Embedding: all-MiniLM-L6-v2, 384-dim"]
+        LS["Similarity: COSINE > 0.4"]
     end
 
     U([User message]) --> RM[retrieve_memory node]
