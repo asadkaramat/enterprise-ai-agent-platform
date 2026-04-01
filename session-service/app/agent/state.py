@@ -22,6 +22,12 @@ class AgentState(TypedDict):
     step_count: int
     token_count: int
     start_time: float
+    tool_call_counts: dict        # tool_name -> call count this turn (for max_calls_per_turn)
+    egress_allowlist: List[dict]  # [{endpoint_pattern, port, protocol}] for tenant egress enforcement
+
+    # Caching / DLP
+    prompt_cache_key: Optional[str]   # Hash for Redis prompt prefix cache
+    guardrail_policies: List[dict]    # Output DLP policies from Control Plane
 
     # Control
     budget_exceeded: bool

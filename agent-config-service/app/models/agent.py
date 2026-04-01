@@ -26,6 +26,15 @@ class Agent(Base):
     session_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=300, server_default="300")
     memory_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+
+    # Points to the currently promoted AgentVersion. NULL until the first
+    # version is created (backward-compatible — old rows have no versions yet).
+    # Not a FK constraint in SQLAlchemy to avoid a circular-reference issue
+    # between agents ↔ agent_versions; enforced at the application layer.
+    active_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), nullable=True
+    )
+
     created_at: Mapped[DateTime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

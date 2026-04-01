@@ -9,6 +9,8 @@ import SessionDetail from './pages/SessionDetail';
 import Tools from './pages/Tools';
 import ToolForm from './pages/ToolForm';
 import Settings from './pages/Settings';
+import EgressAllowlist from './pages/EgressAllowlist';
+import Policies from './pages/Policies';
 
 function RequireApiKey({ children }: { children: React.ReactElement }) {
   const key = localStorage.getItem('agent_platform_api_key');
@@ -61,6 +63,14 @@ export default function App() {
           <Route
             path="/tools/:id/edit"
             element={<RequireApiKey><ToolForm /></RequireApiKey>}
+          />
+          <Route
+            path="/egress"
+            element={<RequireApiKey><EgressAllowlist /></RequireApiKey>}
+          />
+          <Route
+            path="/policies"
+            element={<RequireApiKey><Policies /></RequireApiKey>}
           />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>

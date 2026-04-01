@@ -1,9 +1,12 @@
 import asyncio
+import hashlib
 import json
 import logging
 import uuid
 
 import redis.asyncio as aioredis
+from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.config import settings
 from app.database import AsyncSessionLocal
@@ -38,8 +41,10 @@ async def process_message(message_id: str, fields: dict) -> None:
         session_id_str = fields.get("session_id")
         agent_id_str = fields.get("agent_id")
 
+        event_id = fields.get("event_id")
+
         # All remaining fields become event_data
-        reserved = {"event_type", "tenant_id", "session_id", "agent_id", "timestamp"}
+        reserved = {"event_type", "tenant_id", "session_id", "agent_id", "timestamp", "event_id"}
         event_data: dict = {}
         for key, value in fields.items():
             if key in reserved:
@@ -78,14 +83,45 @@ async def process_message(message_id: str, fields: dict) -> None:
 
         # INSERT only — no UPDATE/DELETE ever
         async with AsyncSessionLocal() as db:
-            event = AuditEvent(
+            # ── Hash chain: find the latest prev_hash for this tenant ────
+            latest_result = await db.execute(
+                select(AuditEvent.prev_hash, AuditEvent.id, AuditEvent.event_type, AuditEvent.event_data)
+                .where(AuditEvent.tenant_id == tenant_id)
+                .order_by(AuditEvent.created_at.desc())
+                .limit(1)
+            )
+            latest_row = latest_result.first()
+            if latest_row is not None:
+                # The chain value to carry forward is this event's computed hash
+                prev_event_hash = latest_row[0]  # prev_hash of the last row
+                # Recompute the hash of the last event to use as our prev_hash
+                last_event_canonical = json.dumps(
+                    {
+                        "id": str(latest_row[1]),
+                        "event_type": latest_row[2],
+                        "event_data": latest_row[3],
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                chain_input = (prev_event_hash or "") + last_event_canonical
+                prev_hash = hashlib.sha256(chain_input.encode()).hexdigest()
+            else:
+                prev_hash = None  # first event for this tenant
+
+            # Build insert — deduplicate by event_id to handle dual Kafka+Redis publishing
+            stmt = pg_insert(AuditEvent).values(
                 tenant_id=tenant_id,
                 session_id=session_id,
                 agent_id=agent_id,
                 event_type=event_type,
                 event_data=event_data,
+                prev_hash=prev_hash,
+                event_id=event_id,
             )
-            db.add(event)
+            if event_id:
+                stmt = stmt.on_conflict_do_nothing(index_elements=["event_id"])
+            await db.execute(stmt)
             await db.commit()
 
         audit_events_consumed_total.labels(event_type=event_type).inc()

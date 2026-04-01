@@ -144,3 +144,15 @@ async def proxy_memory(request: Request, path: str = "") -> StreamingResponse:
 @router.api_route("/api/audit/{path:path}", methods=_METHODS)
 async def proxy_audit(request: Request, path: str = "") -> StreamingResponse:
     return await _proxy(settings.AUDIT_SERVICE_URL, path, request, "audit", "audit")
+
+
+@router.api_route("/api/egress-allowlist", methods=_METHODS)
+@router.api_route("/api/egress-allowlist/{path:path}", methods=_METHODS)
+async def proxy_egress(request: Request, path: str = "") -> StreamingResponse:
+    return await _proxy(settings.AGENT_CONFIG_SERVICE_URL, path, request, "egress-allowlist", "egress-allowlist")
+
+
+@router.api_route("/api/policies", methods=_METHODS)
+@router.api_route("/api/policies/{path:path}", methods=_METHODS)
+async def proxy_policies(request: Request, path: str = "") -> StreamingResponse:
+    return await _proxy(settings.AGENT_CONFIG_SERVICE_URL, path, request, "policies", "policies")

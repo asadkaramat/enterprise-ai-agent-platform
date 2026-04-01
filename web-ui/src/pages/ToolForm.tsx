@@ -16,6 +16,8 @@ type FormValues = {
   input_schema_raw: string;
   output_schema_raw: string;
   auth_config_raw: string;
+  is_cacheable: boolean;
+  cache_ttl_seconds: number;
 };
 
 function tryParseJson(
@@ -62,10 +64,13 @@ export default function ToolForm() {
       input_schema_raw: '',
       output_schema_raw: '',
       auth_config_raw: '',
+      is_cacheable: false,
+      cache_ttl_seconds: 300,
     },
   });
 
   const authType = watch('auth_type');
+  const isCacheable = watch('is_cacheable');
 
   useEffect(() => {
     if (tool) {
@@ -85,6 +90,8 @@ export default function ToolForm() {
         auth_config_raw: tool.auth_config
           ? JSON.stringify(tool.auth_config, null, 2)
           : '',
+        is_cacheable: tool.is_cacheable ?? false,
+        cache_ttl_seconds: tool.cache_ttl_seconds ?? 300,
       });
     }
   }, [tool, reset]);
@@ -121,6 +128,8 @@ export default function ToolForm() {
       output_schema: outputResult.value,
       auth_config:
         values.auth_type !== 'none' ? authResult.value : undefined,
+      is_cacheable: values.is_cacheable,
+      cache_ttl_seconds: values.is_cacheable ? values.cache_ttl_seconds : undefined,
     };
 
     mutation.mutate(payload);
@@ -308,6 +317,50 @@ export default function ToolForm() {
             {authConfigErr && (
               <p className="mt-1 text-xs text-red-600">
                 Invalid JSON: {authConfigErr}
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* Cache results */}
+        <div className="flex items-start gap-3">
+          <input
+            type="checkbox"
+            id="is_cacheable"
+            {...register('is_cacheable')}
+            className="mt-0.5 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+          />
+          <div>
+            <label
+              htmlFor="is_cacheable"
+              className="block text-sm font-medium text-gray-700"
+            >
+              Cache results (idempotent tool)
+            </label>
+            <p className="mt-0.5 text-xs text-gray-500">
+              When enabled, identical calls return the cached result for the configured TTL.
+            </p>
+          </div>
+        </div>
+
+        {/* Cache TTL — shown only when is_cacheable is true */}
+        {isCacheable && (
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Cache TTL (seconds)
+            </label>
+            <input
+              type="number"
+              min={30}
+              {...register('cache_ttl_seconds', {
+                valueAsNumber: true,
+                min: { value: 30, message: 'Minimum TTL is 30 seconds' },
+              })}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            />
+            {errors.cache_ttl_seconds && (
+              <p className="mt-1 text-xs text-red-600">
+                {errors.cache_ttl_seconds.message}
               </p>
             )}
           </div>

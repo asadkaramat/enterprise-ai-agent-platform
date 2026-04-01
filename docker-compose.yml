@@ -62,6 +62,51 @@ services:
       retries: 5
       start_period: 10s
 
+  kafka:
+    image: apache/kafka:3.7.0
+    restart: unless-stopped
+    environment:
+      KAFKA_NODE_ID: "1"
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_RETENTION_HOURS: "168"
+      KAFKA_LOG_SEGMENT_BYTES: "1073741824"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      CLUSTER_ID: "5L6g3nShT-eMCtK--X86sw"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    ports:
+      - "9092:9092"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list 2>/dev/null || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin123}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9000/minio/health/live || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
   qdrant:
     image: qdrant/qdrant:v1.9.2
     restart: unless-stopped
@@ -150,6 +195,7 @@ services:
       OLLAMA_BASE_URL: http://ollama:11434/v1
       AGENT_CONFIG_SERVICE_URL: http://agent-config-service:8001
       MEMORY_SERVICE_URL: http://memory-service:8003
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     depends_on:
       postgres:
         condition: service_healthy
@@ -160,6 +206,8 @@ services:
       agent-config-service:
         condition: service_healthy
       memory-service:
+        condition: service_healthy
+      kafka:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8002/health')\""]
@@ -203,10 +251,19 @@ services:
     environment:
       <<: *common-env
       TOKEN_COST_PER_UNIT: ${TOKEN_COST_PER_UNIT:-0.00001}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin123}
+      MINIO_BUCKET: ${MINIO_AUDIT_BUCKET:-audit-logs}
     depends_on:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      minio:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8004/health')\""]
@@ -275,6 +332,8 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  kafka_data:
+  minio_data:
   qdrant_data:
   ollama_data:
   prometheus_data:

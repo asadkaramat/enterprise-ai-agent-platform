@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Index, String, func, text
+from sqlalchemy import DateTime, Index, String, Text, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -50,6 +50,12 @@ class AuditEvent(Base):
         server_default=func.now(),
         nullable=False,
     )
+    # Hash chain: SHA-256(prev_hash + canonical_event_json).
+    # NULL for the first event in a tenant's chain.
+    prev_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Deduplication key: populated from upstream event_id (Kafka / Redis dual-publish).
+    event_id: Mapped[str | None] = mapped_column(String(36), nullable=True, unique=False)
 
     __table_args__ = (
         # Primary access pattern: tenant-scoped time-range queries (DESC on created_at)

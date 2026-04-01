@@ -67,6 +67,8 @@ export interface Tool {
   auth_config?: Record<string, unknown>;
   is_active: boolean;
   created_at: string;
+  is_cacheable?: boolean;
+  cache_ttl_seconds?: number;
 }
 
 export interface ToolCreate {
@@ -79,6 +81,8 @@ export interface ToolCreate {
   output_schema?: Record<string, unknown>;
   auth_type: 'none' | 'api_key';
   auth_config?: Record<string, unknown>;
+  is_cacheable?: boolean;
+  cache_ttl_seconds?: number;
 }
 
 export interface ToolBinding {
@@ -102,4 +106,29 @@ export interface HealthResponse {
 
 export interface ApiError {
   detail: string;
+}
+
+export interface EgressEntry {
+  id: string;
+  tenant_id: string;
+  endpoint_pattern: string;
+  port: number;
+  protocol: string;
+  description?: string;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface Policy {
+  id: string;
+  tenant_id: string;
+  name: string;
+  scope: string;
+  scope_ref_id?: string;
+  policy_lang: string;
+  policy_body: string;
+  version: number;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
 }

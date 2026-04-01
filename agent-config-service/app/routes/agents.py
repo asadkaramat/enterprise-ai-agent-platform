@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.metrics import agents_created_total
 from app.middleware.tenant import get_tenant_id
+from app.services import config_publisher
 from app.models.agent import Agent
 from app.models.tool import AgentTool, Tool
 
@@ -200,6 +201,7 @@ async def get_agent(
 async def update_agent(
     agent_id: uuid.UUID,
     body: AgentUpdate,
+    request: Request,
     tenant_id: uuid.UUID = Depends(get_tenant_id),
     db: AsyncSession = Depends(get_db),
 ) -> AgentResponse:
@@ -212,12 +214,15 @@ async def update_agent(
     agent.updated_at = datetime.utcnow()
     await db.flush()
     await db.refresh(agent)
+    redis = getattr(request.app.state, "redis", None)
+    await config_publisher.invalidate(redis, str(tenant_id), str(agent_id))
     return AgentResponse.from_orm(agent)
 
 
 @router.delete("/{agent_id}", status_code=204)
 async def delete_agent(
     agent_id: uuid.UUID,
+    request: Request,
     tenant_id: uuid.UUID = Depends(get_tenant_id),
     db: AsyncSession = Depends(get_db),
 ) -> None:
@@ -225,6 +230,8 @@ async def delete_agent(
     agent.is_active = False
     agent.updated_at = datetime.utcnow()
     await db.flush()
+    redis = getattr(request.app.state, "redis", None)
+    await config_publisher.invalidate(redis, str(tenant_id), str(agent_id))
 
 
 # ---------------------------------------------------------------------------

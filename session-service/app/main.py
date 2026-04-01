@@ -17,6 +17,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from app.config import settings
 from app.database import create_tables, engine
 from app.routes.sessions import router as sessions_router
+from app.services.audit import set_kafka_producer
 
 logging.basicConfig(
     level=logging.INFO,
@@ -56,14 +57,44 @@ async def lifespan(app: FastAPI):
         await redis_client.ping()
         app.state.redis = redis_client
         logger.info("session-service: Redis connected at %s", settings.REDIS_URL)
+        from app.agent.nodes import _get_config_client
+        _get_config_client().set_redis(redis_client)
     except Exception as exc:
         logger.error("session-service: Redis connection failed: %s", exc)
         app.state.redis = None
+        # Redis unavailable — ConfigClient will skip cache, use HTTP only
+        from app.agent.nodes import _get_config_client
+        _get_config_client().set_redis(None)
+
+    # Connect Kafka producer
+    kafka_producer = None
+    try:
+        from aiokafka import AIOKafkaProducer
+        import json as _json
+        kafka_producer = AIOKafkaProducer(
+            bootstrap_servers=settings.KAFKA_BOOTSTRAP_SERVERS,
+            value_serializer=lambda v: _json.dumps(v).encode("utf-8"),
+            request_timeout_ms=10000,
+            retry_backoff_ms=500,
+        )
+        await kafka_producer.start()
+        set_kafka_producer(kafka_producer)
+        logger.info("session-service: Kafka producer connected to %s", settings.KAFKA_BOOTSTRAP_SERVERS)
+    except Exception as exc:
+        logger.error("session-service: Kafka producer failed to start — %s. Audit events will use Redis fallback.", exc)
+        set_kafka_producer(None)
 
     yield
 
     # ---- Shutdown ----
     logger.info("session-service: shutting down")
+
+    if kafka_producer is not None:
+        try:
+            await kafka_producer.stop()
+            logger.info("session-service: Kafka producer stopped")
+        except Exception:
+            pass
 
     if redis_client is not None:
         await redis_client.aclose()

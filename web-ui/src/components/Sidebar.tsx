@@ -1,12 +1,14 @@
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Bot, MessagesSquare, Wrench, Settings } from 'lucide-react';
+import { LayoutDashboard, Bot, MessagesSquare, Wrench, Settings, Shield, FileText } from 'lucide-react';
 
 const nav = [
-  { to: '/',         label: 'Dashboard', icon: LayoutDashboard },
-  { to: '/agents',   label: 'Agents',    icon: Bot },
-  { to: '/sessions', label: 'Sessions',  icon: MessagesSquare },
-  { to: '/tools',    label: 'Tools',     icon: Wrench },
-  { to: '/settings', label: 'Settings',  icon: Settings },
+  { to: '/',          label: 'Dashboard', icon: LayoutDashboard },
+  { to: '/agents',    label: 'Agents',    icon: Bot },
+  { to: '/sessions',  label: 'Sessions',  icon: MessagesSquare },
+  { to: '/tools',     label: 'Tools',     icon: Wrench },
+  { to: '/egress',    label: 'Egress',    icon: Shield },
+  { to: '/policies',  label: 'Policies',  icon: FileText },
+  { to: '/settings',  label: 'Settings',  icon: Settings },
 ];
 
 export default function Sidebar() {

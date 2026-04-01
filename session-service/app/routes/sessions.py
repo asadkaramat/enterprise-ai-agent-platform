@@ -94,21 +94,40 @@ class SessionDetail(BaseModel):
 # ---------------------------------------------------------------------------
 
 _STATE_TTL = 60 * 60 * 24  # 24 hours
+_TURN_LOCK_TTL_MS = 30_000  # 30 s — released early on success; TTL is a safety net
 
 
-async def _save_state_to_redis(redis_client, session_id: str, state: dict) -> None:
-    """Serialise the agent state to Redis with a 24-hour TTL."""
-    key = f"session:{session_id}:state"
+async def _acquire_turn_lock(redis_client, tenant_id: str, session_id: str) -> bool:
+    """Acquire a per-session distributed lock. Returns True on success."""
+    key = f"turn:lock:{tenant_id}:{session_id}"
+    result = await redis_client.set(key, "1", nx=True, px=_TURN_LOCK_TTL_MS)
+    return result is not None
+
+
+async def _release_turn_lock(redis_client, tenant_id: str, session_id: str) -> None:
+    key = f"turn:lock:{tenant_id}:{session_id}"
+    await redis_client.delete(key)
+
+
+async def _save_state_to_redis(redis_client, tenant_id: str, session_id: str, state: dict) -> None:
+    """
+    Serialise the agent state to Redis with a 24-hour TTL.
+    Key is scoped by tenant_id to prevent cross-tenant state collisions.
+    Increments the state version counter on every write for audit and
+    optimistic-concurrency purposes.
+    """
+    key = f"{tenant_id}:session:{session_id}:state"
     try:
+        state["version"] = state.get("version", 0) + 1
         serialised = json.dumps(state, default=str)
         await redis_client.set(key, serialised, ex=_STATE_TTL)
     except Exception as exc:
         logger.warning("_save_state_to_redis: failed for session %s: %s", session_id, exc)
 
 
-async def _load_state_from_redis(redis_client, session_id: str) -> Optional[dict]:
-    """Load and deserialise the agent state from Redis."""
-    key = f"session:{session_id}:state"
+async def _load_state_from_redis(redis_client, tenant_id: str, session_id: str) -> Optional[dict]:
+    """Load and deserialise the agent state from Redis (tenant-scoped key)."""
+    key = f"{tenant_id}:session:{session_id}:state"
     try:
         raw = await redis_client.get(key)
         if raw is None:
@@ -145,6 +164,9 @@ def _build_initial_state(
         step_count=0,
         token_count=0,
         start_time=time.time(),
+        # Caching / DLP
+        prompt_cache_key=None,
+        guardrail_policies=[],
         # Control
         budget_exceeded=False,
         budget_reason="",
@@ -154,6 +176,7 @@ def _build_initial_state(
         # Final
         final_response=None,
         error=None,
+        egress_allowlist=[],
         # Internal — not persisted in DB, injected at runtime
         _redis=redis_client,  # type: ignore[typeddict-item]
     )
@@ -257,7 +280,7 @@ async def create_session(
         user_message=body.message,
         redis_client=redis_client,
     )
-    await _save_state_to_redis(redis_client, session_id, dict(initial_state))
+    await _save_state_to_redis(redis_client, str(tenant_id), session_id, dict(initial_state))
 
     # Publish session_start audit event
     await publish_event(
@@ -276,7 +299,17 @@ async def create_session(
 
     # Save final state to Redis (drop non-serialisable _redis key)
     state_to_save = {k: v for k, v in final_state.items() if k != "_redis"}
-    await _save_state_to_redis(redis_client, session_id, state_to_save)
+    await _save_state_to_redis(redis_client, str(tenant_id), session_id, state_to_save)
+
+    # Update activity sorted set — enables efficient listing by last-active time
+    # without a full DB scan.  Score = Unix timestamp.
+    try:
+        await redis_client.zadd(
+            f"{tenant_id}:sessions:by_activity",
+            {session_id: time.time()},
+        )
+    except Exception as exc:
+        logger.debug("create_session: activity index update failed (non-fatal): %s", exc)
 
     # Publish session_complete audit event
     await publish_event(
@@ -376,7 +409,7 @@ async def continue_session(
         )
 
     # Load persisted state from Redis
-    persisted_state = await _load_state_from_redis(redis_client, session_id)
+    persisted_state = await _load_state_from_redis(redis_client, str(tenant_id), session_id)
     if persisted_state is None:
         # State expired or was never saved — rebuild from DB and restart
         logger.warning("continue_session: no Redis state for %s, rebuilding", session_id)
@@ -404,6 +437,14 @@ async def continue_session(
         persisted_state["route_to_agent_id"] = None
         persisted_state["route_message"] = None
 
+    # Acquire per-session turn lock to prevent concurrent turns corrupting state
+    lock_acquired = await _acquire_turn_lock(redis_client, str(tenant_id), session_id)
+    if not lock_acquired:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Another turn is already in progress for this session. Please wait.",
+        )
+
     # Mark session active again
     session.status = "active"
     session.updated_at = datetime.utcnow()
@@ -411,14 +452,26 @@ async def continue_session(
     await db.flush()
 
     # Run graph
-    final_state = await _run_graph(persisted_state, redis_client)
+    try:
+        final_state = await _run_graph(persisted_state, redis_client)
+    finally:
+        await _release_turn_lock(redis_client, str(tenant_id), session_id)
 
     # Update DB
     await _update_session_from_result(db, session, final_state)
 
     # Save state
     state_to_save = {k: v for k, v in final_state.items() if k != "_redis"}
-    await _save_state_to_redis(redis_client, session_id, state_to_save)
+    await _save_state_to_redis(redis_client, str(tenant_id), session_id, state_to_save)
+
+    # Update activity sorted set
+    try:
+        await redis_client.zadd(
+            f"{tenant_id}:sessions:by_activity",
+            {session_id: time.time()},
+        )
+    except Exception as exc:
+        logger.debug("continue_session: activity index update failed (non-fatal): %s", exc)
 
     # Audit
     await publish_event(
@@ -538,7 +591,7 @@ async def get_session(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
     # Load conversation history from Redis
-    persisted_state = await _load_state_from_redis(redis_client, session_id)
+    persisted_state = await _load_state_from_redis(redis_client, str(session.tenant_id), session_id)
     messages: List[dict] = []
     if persisted_state:
         raw_messages = persisted_state.get("messages", [])

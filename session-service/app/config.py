@@ -8,6 +8,12 @@ class Settings(BaseSettings):
     AGENT_CONFIG_SERVICE_URL: str = "http://agent-config-service:8001"
     MEMORY_SERVICE_URL: str = "http://memory-service:8003"
     INTERNAL_SECRET: str = "changeme-internal-secret"
+    FALLBACK_MODEL: str = "llama3.2"  # Used by LLMRouter when the primary model fails
+    MAX_LLM_REQUESTS_PER_MINUTE: int = 100  # Per-tenant LLM rate limit (requests/min)
+    MAX_TOOL_CALLS_PER_MINUTE: int = 200   # Per-tenant per-tool rate limit (calls/min)
+    MAX_TOOL_RESPONSE_BYTES: int = 102_400  # 100 KB cap per tool response
+    MAX_OUTPUT_CHARS: int = 8192  # DLP output size limit
+    KAFKA_BOOTSTRAP_SERVERS: str = "kafka:9092"
 
     class Config:
         env_file = ".env"

@@ -1,5 +1,6 @@
 import logging
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -38,6 +39,19 @@ async def get_db():
             raise
         finally:
             await session.close()
+
+
+async def run_column_migrations() -> None:
+    """Idempotent column-level migrations for existing tables."""
+    _migrations = [
+        "ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS prev_hash TEXT",
+        "ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS event_id VARCHAR(36)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_audit_events_event_id ON audit_events (event_id) WHERE event_id IS NOT NULL",
+    ]
+    async with engine.begin() as conn:
+        for stmt in _migrations:
+            await conn.execute(text(stmt))
+    logger.info("Audit column migrations applied.")
 
 
 async def create_tables() -> None:

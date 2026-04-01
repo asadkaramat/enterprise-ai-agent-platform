@@ -8,9 +8,11 @@ from fastapi.responses import Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from app.config import settings
-from app.database import create_tables, dispose_engine
+from app.database import create_tables, dispose_engine, run_column_migrations
 from app.routes.audit import router as audit_router
 from app.services.consumer import run_consumer
+from app.services.kafka_consumer import run_kafka_consumer
+from app.services.blob_archiver import run_archiver
 
 logging.basicConfig(
     level=logging.INFO,
@@ -27,6 +29,7 @@ async def lifespan(app: FastAPI):
     logger.info("audit-service starting up on port 8004")
 
     # Ensure PostgreSQL schema is ready
+    await run_column_migrations()
     await create_tables()
 
     # Create Redis client and store on app.state so routes can reach it
@@ -45,6 +48,22 @@ async def lifespan(app: FastAPI):
     app.state.consumer_task = consumer_task
     logger.info("Redis Stream consumer task started")
 
+    # Start Kafka consumer as a background task (primary audit event source)
+    kafka_task: asyncio.Task = asyncio.create_task(
+        run_kafka_consumer(),
+        name="kafka-audit-consumer",
+    )
+    app.state.kafka_task = kafka_task
+    logger.info("Kafka consumer task started")
+
+    # Start MinIO blob archiver as a background task
+    archiver_task: asyncio.Task = asyncio.create_task(
+        run_archiver(),
+        name="blob-archiver",
+    )
+    app.state.archiver_task = archiver_task
+    logger.info("Blob archiver task started")
+
     yield
 
     # ------------------------------------------------------------------
@@ -58,6 +77,22 @@ async def lifespan(app: FastAPI):
         await asyncio.wait_for(asyncio.shield(consumer_task), timeout=10.0)
     except (asyncio.CancelledError, asyncio.TimeoutError):
         pass
+
+    # Cancel Kafka consumer
+    if hasattr(app.state, "kafka_task"):
+        app.state.kafka_task.cancel()
+        try:
+            await asyncio.wait_for(asyncio.shield(app.state.kafka_task), timeout=10.0)
+        except (asyncio.CancelledError, asyncio.TimeoutError):
+            pass
+
+    # Cancel blob archiver
+    if hasattr(app.state, "archiver_task"):
+        app.state.archiver_task.cancel()
+        try:
+            await asyncio.wait_for(asyncio.shield(app.state.archiver_task), timeout=5.0)
+        except (asyncio.CancelledError, asyncio.TimeoutError):
+            pass
 
     # Close Redis connection pool
     await redis_client.aclose()
