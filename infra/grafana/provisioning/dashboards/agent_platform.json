@@ -1,0 +1,70 @@
+{
+  "title": "Agent Platform Overview",
+  "uid": "agent-platform-overview",
+  "version": 1,
+  "schemaVersion": 38,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Sessions Created (total)",
+      "type": "stat",
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
+      "targets": [{ "expr": "sum(sessions_created_total)", "legendFormat": "Sessions" }]
+    },
+    {
+      "id": 2,
+      "title": "LLM Tokens Used (total)",
+      "type": "stat",
+      "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
+      "targets": [{ "expr": "sum(llm_tokens_total)", "legendFormat": "Tokens" }]
+    },
+    {
+      "id": 3,
+      "title": "Tool Calls (total)",
+      "type": "stat",
+      "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
+      "targets": [{ "expr": "sum(tool_calls_total)", "legendFormat": "Tool Calls" }]
+    },
+    {
+      "id": 4,
+      "title": "Budget Exceeded (total)",
+      "type": "stat",
+      "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
+      "targets": [{ "expr": "sum(budget_exceeded_total)", "legendFormat": "Budget Exceeded" }]
+    },
+    {
+      "id": 5,
+      "title": "Gateway Requests / min",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "targets": [{ "expr": "rate(gateway_requests_total[1m]) * 60", "legendFormat": "{{status}}" }]
+    },
+    {
+      "id": 6,
+      "title": "Auth Failures / min",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+      "targets": [{ "expr": "rate(gateway_auth_failures_total[1m]) * 60", "legendFormat": "{{reason}}" }]
+    },
+    {
+      "id": 7,
+      "title": "Audit Events Consumed / min",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
+      "targets": [{ "expr": "rate(audit_events_consumed_total[1m]) * 60", "legendFormat": "{{event_type}}" }]
+    },
+    {
+      "id": 8,
+      "title": "Memory Operations / min",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 12, "w": 12, "h": 8 },
+      "targets": [
+        { "expr": "rate(memory_append_total[1m]) * 60", "legendFormat": "append" },
+        { "expr": "rate(memory_retrieve_total[1m]) * 60", "legendFormat": "retrieve" },
+        { "expr": "rate(memory_store_long_total[1m]) * 60", "legendFormat": "store_long" }
+      ]
+    }
+  ]
+}

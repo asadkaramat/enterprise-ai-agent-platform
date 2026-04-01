@@ -1,0 +1,281 @@
+# ============================================================
+# Enterprise AI Agent Platform — Docker Compose
+# Local MVP: designed for Apple M4 Max (128 GB RAM, ARM64)
+#
+# Production notes:
+#   - Replace Redis with managed Redis (Upstash, ElastiCache)
+#   - Replace PostgreSQL with managed RDS
+#   - Replace Qdrant with Qdrant Cloud
+#   - Replace Ollama with any OpenAI-compatible endpoint
+#     (Azure OpenAI, Bedrock, etc.) by changing OLLAMA_BASE_URL
+#   - Each service is stateless and Kubernetes-ready:
+#     health checks, env-var config, non-root user
+#   - Target: 100 concurrent sessions on local machine
+# ============================================================
+
+x-common-env: &common-env
+  DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-changeme-postgres}@postgres:5432/${POSTGRES_DB:-agentplatform}
+  REDIS_URL: redis://redis:6379
+  INTERNAL_SECRET: ${INTERNAL_SECRET:-changeme-internal-secret}
+
+services:
+
+  # ──────────────────────────────────────────────
+  # Infrastructure
+  # ──────────────────────────────────────────────
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-agentplatform}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme-postgres}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-agentplatform}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 4gb
+      --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  qdrant:
+    image: qdrant/qdrant:v1.9.2
+    restart: unless-stopped
+    volumes:
+      - qdrant_data:/qdrant/storage
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    # No healthcheck — qdrant image has no curl/wget; memory-service retries on connect
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    # Pull the default model on first start
+    # On M4 Max, llama3.2 runs via Metal acceleration automatically
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        ollama serve &
+        sleep 10
+        ollama pull ${OLLAMA_MODEL:-llama3.2}
+        wait
+
+  # ──────────────────────────────────────────────
+  # Backend Services
+  # ──────────────────────────────────────────────
+
+  gateway-service:
+    build:
+      context: ./gateway-service
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      <<: *common-env
+      ADMIN_SECRET: ${ADMIN_SECRET:-changeme-admin-secret}
+      AGENT_CONFIG_SERVICE_URL: http://agent-config-service:8001
+      SESSION_SERVICE_URL: http://session-service:8002
+      MEMORY_SERVICE_URL: http://memory-service:8003
+      AUDIT_SERVICE_URL: http://audit-service:8004
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  agent-config-service:
+    build:
+      context: ./agent-config-service
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    environment:
+      <<: *common-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8001/health')\""]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  session-service:
+    build:
+      context: ./session-service
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8002:8002"
+    environment:
+      <<: *common-env
+      OLLAMA_BASE_URL: http://ollama:11434/v1
+      AGENT_CONFIG_SERVICE_URL: http://agent-config-service:8001
+      MEMORY_SERVICE_URL: http://memory-service:8003
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+      agent-config-service:
+        condition: service_healthy
+      memory-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8002/health')\""]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  memory-service:
+    build:
+      context: ./memory-service
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8003:8003"
+    environment:
+      REDIS_URL: redis://redis:6379
+      QDRANT_URL: http://qdrant:6333
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-all-MiniLM-L6-v2}
+      SHORT_TERM_TTL_HOURS: ${SHORT_TERM_TTL_HOURS:-24}
+      SHORT_TERM_MAX_MESSAGES: ${SHORT_TERM_MAX_MESSAGES:-50}
+    depends_on:
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8003/health')\""]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 120s  # sentence-transformers model load
+
+  audit-service:
+    build:
+      context: ./audit-service
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8004:8004"
+    environment:
+      <<: *common-env
+      TOKEN_COST_PER_UNIT: ${TOKEN_COST_PER_UNIT:-0.00001}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8004/health')\""]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # ──────────────────────────────────────────────
+  # Web UI
+  # ──────────────────────────────────────────────
+
+  web-ui:
+    build:
+      context: ./web-ui
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      - gateway-service
+
+  # ──────────────────────────────────────────────
+  # Observability
+  # ──────────────────────────────────────────────
+
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    restart: unless-stopped
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=7d'
+      - '--web.enable-lifecycle'
+    depends_on:
+      - gateway-service
+      - agent-config-service
+      - session-service
+      - memory-service
+      - audit-service
+
+  grafana:
+    image: grafana/grafana:10.4.3
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GF_SECURITY_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD:-changeme-grafana}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
+
+# ──────────────────────────────────────────────
+# Volumes (all disk-backed for persistence)
+# ──────────────────────────────────────────────
+
+volumes:
+  postgres_data:
+  redis_data:
+  qdrant_data:
+  ollama_data:
+  prometheus_data:
+  grafana_data:
